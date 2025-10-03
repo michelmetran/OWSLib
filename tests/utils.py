@@ -1,9 +1,13 @@
 import logging
 import os
 import sys
-import requests
-from owslib.etree import etree, ElementType
 from urllib.parse import urlparse
+
+import requests
+from urllib3.util import create_urllib3_context
+
+from owslib.etree import ElementType, etree
+from owslib.utils_tls import CustomSSLContextHTTPAdapter
 
 
 def setup_logging(loglevel='INFO'):
@@ -83,7 +87,22 @@ def sorted_url_query(url):
 
 def service_ok(url, timeout=5):
     try:
-        resp = requests.get(url, allow_redirects=True, timeout=timeout, stream=True)
+
+        # -----------------------------------------------------
+        # Modifiquei para
+        # Create Context
+        ctx = create_urllib3_context()
+        ctx.load_default_certs()
+        ctx.set_ciphers('AES256-GCM-SHA384')
+
+        # Get Session
+        session = requests.session()
+        session.adapters.pop('https://', None)
+        session.mount('https://', CustomSSLContextHTTPAdapter(ctx))
+        # -----------------------------------------------------
+
+
+        resp = session.get(url, allow_redirects=True, timeout=timeout, stream=True)
         if 'html' in resp.headers.get('content-type', '').lower():
             resp.close()
             return False

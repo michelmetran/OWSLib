@@ -7,24 +7,33 @@
 # Contact email: tomkralidis@gmail.com
 # =============================================================================
 
-import os
-import sys
-from collections import OrderedDict
-from dateutil import parser
-from datetime import datetime, timedelta, timezone
-from owslib.etree import etree, ParseError
-from owslib.namespaces import Namespaces
-from urllib.parse import urlsplit, urlencode, urlparse, parse_qs, urlunparse, parse_qsl
-import copy
-
-from io import StringIO, BytesIO
-
-import re
-from copy import deepcopy
-import warnings
-import requests
-from requests.auth import AuthBase
 import codecs
+import copy
+import os
+import re
+import sys
+import warnings
+from collections import OrderedDict
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+from io import BytesIO, StringIO
+from urllib.parse import (
+    parse_qs,
+    parse_qsl,
+    urlencode,
+    urlparse,
+    urlsplit,
+    urlunparse,
+)
+
+import requests
+from dateutil import parser
+from requests.auth import AuthBase
+from urllib3.util import create_urllib3_context
+
+from owslib.etree import ParseError, etree
+from owslib.namespaces import Namespaces
+from owslib.utils_tls import CustomSSLContextHTTPAdapter
 
 """
 Utility functions and classes
@@ -38,8 +47,17 @@ class ServiceException(Exception):
 
 # http://stackoverflow.com/questions/6256183/combine-two-dictionaries-of-dictionaries-python
 def dict_union(d1, d2):
-    return dict((x, (dict_union(d1.get(x, {}), d2[x]) if isinstance(d2.get(x), dict) else d2.get(x, d1.get(x))))
-                for x in set(list(d1.keys()) + list(d2.keys())))
+    return dict(
+        (
+            x,
+            (
+                dict_union(d1.get(x, {}), d2[x])
+                if isinstance(d2.get(x), dict)
+                else d2.get(x, d1.get(x))
+            ),
+        )
+        for x in set(list(d1.keys()) + list(d2.keys()))
+    )
 
 
 # Infinite DateTimes for Python.  Used in SWE 2.0 and other OGC specs as "INF" and "-INF"
@@ -71,8 +89,8 @@ all_cap_re = re.compile('([a-z0-9])([A-Z])')
 
 def format_string(prop_string):
     """
-        Formats a property string to remove spaces and go from CamelCase to pep8
-        from: http://stackoverflow.com/questions/1175208/elegant-python-function-to-convert-camelcase-to-camel-case
+    Formats a property string to remove spaces and go from CamelCase to pep8
+    from: http://stackoverflow.com/questions/1175208/elegant-python-function-to-convert-camelcase-to-camel-case
     """
     if prop_string is None:
         return ''
@@ -83,22 +101,22 @@ def format_string(prop_string):
 
 def xml_to_dict(root, prefix=None, depth=1, diction=None):
     """
-        Recursively iterates through an xml element to convert each element in the tree to a (key,val).
-        Where key is the element tag and val is the inner-text of the element.
-        Note that this recursively go through the tree until the depth specified.
+    Recursively iterates through an xml element to convert each element in the tree to a (key,val).
+    Where key is the element tag and val is the inner-text of the element.
+    Note that this recursively go through the tree until the depth specified.
 
-        Parameters
-        ===========
-        :root - root xml element, starting point of iteration
-        :prefix - a string to prepend to the resulting key (optional)
-        :depth - the number of depths to process in the tree (optional)
-        :diction - the dictionary to insert the (tag,text) pairs into (optional)
+    Parameters
+    ===========
+    :root - root xml element, starting point of iteration
+    :prefix - a string to prepend to the resulting key (optional)
+    :depth - the number of depths to process in the tree (optional)
+    :diction - the dictionary to insert the (tag,text) pairs into (optional)
 
-        Return
-        =======
-        Dictionary of (key,value); where key is the element tag stripped of namespace and cleaned up to be pep8 and
-        value is the inner-text of the element. Note that duplicate elements will be replaced by the last element of the
-        same tag in the tree.
+    Return
+    =======
+    Dictionary of (key,value); where key is the element tag stripped of namespace and cleaned up to be pep8 and
+    value is the inner-text of the element. Note that duplicate elements will be replaced by the last element of the
+    same tag in the tree.
     """
     ret = diction if diction is not None else dict()
     for child in root:
@@ -106,7 +124,9 @@ def xml_to_dict(root, prefix=None, depth=1, diction=None):
         # skip values that are empty or None
         if val is None or val == '':
             if depth > 1:
-                ret = xml_to_dict(child, prefix=prefix, depth=(depth - 1), diction=ret)
+                ret = xml_to_dict(
+                    child, prefix=prefix, depth=(depth - 1), diction=ret
+                )
             continue
 
         key = format_string(child.tag.split('}')[-1])
@@ -116,7 +136,9 @@ def xml_to_dict(root, prefix=None, depth=1, diction=None):
 
         ret[key] = val
         if depth > 1:
-            ret = xml_to_dict(child, prefix=prefix, depth=(depth - 1), diction=ret)
+            ret = xml_to_dict(
+                child, prefix=prefix, depth=(depth - 1), diction=ret
+            )
 
     return ret
 
@@ -127,6 +149,7 @@ class ResponseWrapper(object):
 
     Provides a thin shim around requests response object to maintain code compatibility.
     """
+
     def __init__(self, response):
         self._response = response
 
@@ -142,8 +165,19 @@ class ResponseWrapper(object):
     # @TODO: __getattribute__ for poking at response
 
 
-def openURL(url_base, data=None, method='Get', cookies=None, username=None, password=None, timeout=30, headers=None,
-            verify=True, cert=None, auth=None):
+def openURL(
+    url_base,
+    data=None,
+    method='Get',
+    cookies=None,
+    username=None,
+    password=None,
+    timeout=30,
+    headers=None,
+    verify=True,
+    cert=None,
+    auth=None,
+):
     """
     Function to open URLs.
 
@@ -199,22 +233,43 @@ def openURL(url_base, data=None, method='Get', cookies=None, username=None, pass
         rkwargs['params'] = data
 
     else:
-        raise ValueError("Unknown method ('%s'), expected 'get' or 'post'" % method)
+        raise ValueError(
+            "Unknown method ('%s'), expected 'get' or 'post'" % method
+        )
 
     if cookies is not None:
         rkwargs['cookies'] = cookies
 
-    req = requests.request(method.upper(), url_base, headers=headers, **rkwargs)
+    # -----------------------------------------------------
+    # Era só isso!
+    # req = requests.request(method.upper(), url_base, headers=headers, **rkwargs)
+
+    # -----------------------------------------------------
+    # Modifiquei para
+    # Create Context
+    ctx = create_urllib3_context()
+    ctx.load_default_certs()
+    ctx.set_ciphers('AES256-GCM-SHA384')
+
+    # Get Session
+    session = requests.session()
+    session.adapters.pop('https://', None)
+    session.mount('https://', CustomSSLContextHTTPAdapter(ctx))
+    req = session.request(method.upper(), url_base, headers=headers, **rkwargs)
+    # -----------------------------------------------------
 
     if req.status_code in [400, 401, 403]:
         raise ServiceException(req.text)
 
-    if req.status_code in [404, 500, 502, 503, 504]:    # add more if needed
+    if req.status_code in [404, 500, 502, 503, 504]:  # add more if needed
         req.raise_for_status()
 
     # check for service exceptions without the http header set
-    if 'Content-Type' in req.headers and \
-            req.headers['Content-Type'] in ['text/xml', 'application/xml', 'application/vnd.ogc.se_xml']:
+    if 'Content-Type' in req.headers and req.headers['Content-Type'] in [
+        'text/xml',
+        'application/xml',
+        'application/vnd.ogc.se_xml',
+    ]:
         # just in case 400 headers were not set, going to have to read the xml to see if it's an exception report.
         se_tree = etree.fromstring(req.content)
 
@@ -224,14 +279,22 @@ def openURL(url_base, data=None, method='Get', cookies=None, username=None, pass
             '{http://www.opengis.net/ows}Exception',
             '{http://www.opengis.net/ows/1.1}Exception',
             '{http://www.opengis.net/ogc}ServiceException',
-            'ServiceException'
+            'ServiceException',
         ]
 
         for possible_error in possible_errors:
             serviceException = se_tree.find(possible_error)
             if serviceException is not None:
                 # and we need to deal with some message nesting
-                raise ServiceException('\n'.join([t.strip() for t in serviceException.itertext() if t.strip()]))
+                raise ServiceException(
+                    '\n'.join(
+                        [
+                            t.strip()
+                            for t in serviceException.itertext()
+                            if t.strip()
+                        ]
+                    )
+                )
 
     return ResponseWrapper(req)
 
@@ -241,7 +304,6 @@ OWS_NAMESPACE = 'http://www.opengis.net/ows/1.1'
 
 
 def nspath(path, ns=OWS_NAMESPACE):
-
     """
 
     Prefix the given path with the given namespace identifier.
@@ -266,7 +328,7 @@ def nspath(path, ns=OWS_NAMESPACE):
 
 
 def nspath_eval(xpath, namespaces):
-    ''' Return an etree friendly xpath '''
+    '''Return an etree friendly xpath'''
     out = []
     for chunks in xpath.split('/'):
         namespace, element = chunks.split(':')
@@ -275,7 +337,7 @@ def nspath_eval(xpath, namespaces):
 
 
 def cleanup_namespaces(element):
-    """ Remove unused namespaces from an element """
+    """Remove unused namespaces from an element"""
     etree.cleanup_namespaces(element)
     return element
 
@@ -349,15 +411,20 @@ def getXMLTree(rsp: ResponseWrapper) -> etree:
     has_xml_tag = raw_text.lstrip().startswith(b'<?xml')
 
     xml_types = ['text/xml', 'application/xml', 'application/vnd.ogc.wms_xml']
-    if not any(xt in content_type.lower() for xt in xml_types) and not has_xml_tag:
+    if (
+        not any(xt in content_type.lower() for xt in xml_types)
+        and not has_xml_tag
+    ):
         html_body = et.find('BODY')  # note this is case-sensitive
         if html_body is not None and len(html_body.text) > 0:
             response_text = html_body.text.strip("\n")
         else:
             response_text = raw_text
 
-        raise ValueError("%s responded with Content-Type '%s': '%s'" %
-                         (url, content_type, response_text))
+        raise ValueError(
+            "%s responded with Content-Type '%s': '%s'"
+            % (url, content_type, response_text)
+        )
 
     return et
 
@@ -403,7 +470,16 @@ def testXMLAttribute(element, attribute):
     return None
 
 
-def http_post(url=None, request=None, lang='en-US', timeout=10, username=None, password=None, auth=None, headers=None):
+def http_post(
+    url=None,
+    request=None,
+    lang='en-US',
+    timeout=10,
+    username=None,
+    password=None,
+    auth=None,
+    headers=None,
+):
     """
 
     Invoke an HTTP POST request
@@ -457,10 +533,25 @@ def http_post(url=None, request=None, lang='en-US', timeout=10, username=None, p
     rkwargs['verify'] = auth.verify
     rkwargs['cert'] = auth.cert
 
+    # -----------------------------------------------------
+    # Modifiquei para
+    # Create Context
+    ctx = create_urllib3_context()
+    ctx.load_default_certs()
+    ctx.set_ciphers('AES256-GCM-SHA384')
+
+    # Get Session
+    session = requests.session()
+    session.adapters.pop('https://', None)
+    session.mount('https://', CustomSSLContextHTTPAdapter(ctx))
+    # -----------------------------------------------------
+
     if not isinstance(request, dict):
-        return requests.post(url, request, headers=headers_, **rkwargs)
+        # return requests.post(url, request, headers=headers_, **rkwargs)
+        return session.post(url, request, headers=headers_, **rkwargs)
     else:
-        return requests.post(url, json=request, headers=headers_, **rkwargs)
+        # return requests.post(url, json=request, headers=headers_, **rkwargs)
+        return session.post(url, json=request, headers=headers_, **rkwargs)
 
 
 def http_prepare(*args, **kwargs):
@@ -500,7 +591,20 @@ def http_prepare(*args, **kwargs):
 
 def http_get(*args, **kwargs):
     rkwargs = http_prepare(*args, **kwargs)
-    return requests.get(*args, **rkwargs)
+
+    # -----------------------------------------------------
+    # Modifiquei para
+    # Create Context
+    ctx = create_urllib3_context()
+    ctx.load_default_certs()
+    ctx.set_ciphers('AES256-GCM-SHA384')
+
+    # Get Session
+    session = requests.session()
+    session.adapters.pop('https://', None)
+    session.mount('https://', CustomSSLContextHTTPAdapter(ctx))
+    # -----------------------------------------------------
+    return session.get(*args, **rkwargs)
 
 
 def http_put(*args, **kwargs):
@@ -512,13 +616,36 @@ def http_put(*args, **kwargs):
             rkwargs.pop('data')
         else:
             rkwargs['data'] = kwargs['data']
+    # -----------------------------------------------------
+    # Modifiquei para
+    # Create Context
+    ctx = create_urllib3_context()
+    ctx.load_default_certs()
+    ctx.set_ciphers('AES256-GCM-SHA384')
 
-    return requests.put(*args, **rkwargs)
+    # Get Session
+    session = requests.session()
+    session.adapters.pop('https://', None)
+    session.mount('https://', CustomSSLContextHTTPAdapter(ctx))
+    # -----------------------------------------------------
+    return session.put(*args, **rkwargs)
 
 
 def http_delete(*args, **kwargs):
     rkwargs = http_prepare(*args, **kwargs)
-    return requests.delete(*args, **rkwargs)
+    # -----------------------------------------------------
+    # Modifiquei para
+    # Create Context
+    ctx = create_urllib3_context()
+    ctx.load_default_certs()
+    ctx.set_ciphers('AES256-GCM-SHA384')
+
+    # Get Session
+    session = requests.session()
+    session.adapters.pop('https://', None)
+    session.mount('https://', CustomSSLContextHTTPAdapter(ctx))
+    # -----------------------------------------------------    
+    return session.delete(*args, **rkwargs)
 
 
 def element_to_string(element, encoding=None, xml_declaration=False):
@@ -541,9 +668,12 @@ def element_to_string(element, encoding=None, xml_declaration=False):
     if xml_declaration:
         if encoding in ['unicode', 'utf-8']:
             output = '<?xml version="1.0" encoding="utf-8" standalone="no"?>\n{}'.format(
-                etree.tostring(element, encoding='unicode'))
+                etree.tostring(element, encoding='unicode')
+            )
         else:
-            output = etree.tostring(element, encoding=encoding, xml_declaration=True)
+            output = etree.tostring(
+                element, encoding=encoding, xml_declaration=True
+            )
     else:
         output = etree.tostring(element)
 
@@ -561,8 +691,10 @@ def xml2string(xml):
     - xml: xml string
 
     """
-    warnings.warn("DEPRECIATION WARNING!  You should now use the 'element_to_string' method \
-                   The 'xml2string' method will be removed in a future version of OWSLib.")
+    warnings.warn(
+        "DEPRECIATION WARNING!  You should now use the 'element_to_string' method \
+                   The 'xml2string' method will be removed in a future version of OWSLib."
+    )
     return '<?xml version="1.0" encoding="ISO-8859-1" standalone="no"?>\n' + xml
 
 
@@ -587,7 +719,7 @@ def xmlvalid(xml, xsd):
 
 
 def xmltag_split(tag):
-    ''' Return XML element bare tag name (without prefix) '''
+    '''Return XML element bare tag name (without prefix)'''
     try:
         return tag.split('}')[1]
     except Exception:
@@ -595,7 +727,7 @@ def xmltag_split(tag):
 
 
 def getNamespace(element):
-    ''' Utility method to extract the namespace from an XML element tag encoded as {namespace}localname. '''
+    '''Utility method to extract the namespace from an XML element tag encoded as {namespace}localname.'''
     if element.tag[0] == '{':
         return element.tag[1:].split("}")[0]
     else:
@@ -603,7 +735,7 @@ def getNamespace(element):
 
 
 def build_get_url(base_url, params, overwrite=False, doseq=False):
-    ''' Utility function to build a full HTTP GET URL from the service base URL and a dictionary of HTTP parameters.
+    '''Utility function to build a full HTTP GET URL from the service base URL and a dictionary of HTTP parameters.
 
     TODO: handle parameters case-insensitive?
 
@@ -641,11 +773,13 @@ def build_get_url(base_url, params, overwrite=False, doseq=False):
 def dump(obj, prefix=''):
     '''Utility function to print to standard output a generic object with all its attributes.'''
 
-    return "{} {}.{} : {}".format(prefix, obj.__module__, obj.__class__.__name__, obj.__dict__)
+    return "{} {}.{} : {}".format(
+        prefix, obj.__module__, obj.__class__.__name__, obj.__dict__
+    )
 
 
 def getTypedValue(data_type, value):
-    '''Utility function to cast a string value to the appropriate XSD type. '''
+    '''Utility function to cast a string value to the appropriate XSD type.'''
 
     # If the default value is empty
     if value is None:
@@ -664,18 +798,18 @@ def getTypedValue(data_type, value):
 
 
 def extract_time(element):
-    ''' return a datetime object based on a gml text string
+    '''return a datetime object based on a gml text string
 
-ex:
-<gml:beginPosition>2006-07-27T21:10:00Z</gml:beginPosition>
-<gml:endPosition indeterminatePosition="now"/>
+    ex:
+    <gml:beginPosition>2006-07-27T21:10:00Z</gml:beginPosition>
+    <gml:endPosition indeterminatePosition="now"/>
 
-If there happens to be a strange element with both attributes and text,
-use the text.
-ex: <gml:beginPosition indeterminatePosition="now">2006-07-27T21:10:00Z</gml:beginPosition>
-Would be 2006-07-27T21:10:00Z, not 'now'
+    If there happens to be a strange element with both attributes and text,
+    use the text.
+    ex: <gml:beginPosition indeterminatePosition="now">2006-07-27T21:10:00Z</gml:beginPosition>
+    Would be 2006-07-27T21:10:00Z, not 'now'
 
-'''
+    '''
     if element is None:
         return None
 
@@ -692,9 +826,9 @@ Would be 2006-07-27T21:10:00Z, not 'now'
 
 def extract_xml_list(elements):
     """
-Some people don't have separate tags for their keywords and separate them with
-a newline. This will extract out all of the keywords correctly.
-"""
+    Some people don't have separate tags for their keywords and separate them with
+    a newline. This will extract out all of the keywords correctly.
+    """
     if elements is None:
         return []
 
@@ -705,8 +839,7 @@ a newline. This will extract out all of the keywords correctly.
 
 
 def strip_bom(raw_text):
-    """ return the raw (assumed) xml response without the BOM
-    """
+    """return the raw (assumed) xml response without the BOM"""
     boms = [
         # utf-8
         codecs.BOM_UTF8,
@@ -720,13 +853,13 @@ def strip_bom(raw_text):
         # utf-32
         codecs.BOM_UTF32,
         codecs.BOM_UTF32_LE,
-        codecs.BOM_UTF32_BE
+        codecs.BOM_UTF32_BE,
     ]
 
     if isinstance(raw_text, bytes):
         for bom in boms:
             if raw_text.startswith(bom):
-                return raw_text[len(bom):]
+                return raw_text[len(bom) :]
     return raw_text
 
 
@@ -750,14 +883,16 @@ def clean_ows_url(url):
         if key.lower() not in basic_service_elements:
             filtered_kvp[key] = value
 
-    newurl = urlunparse([
-        parsed.scheme,
-        parsed.netloc,
-        parsed.path,
-        parsed.params,
-        urlencode(filtered_kvp, doseq=True),
-        parsed.fragment
-    ])
+    newurl = urlunparse(
+        [
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            urlencode(filtered_kvp, doseq=True),
+            parsed.fragment,
+        ]
+    )
 
     return newurl
 
@@ -806,7 +941,7 @@ def findall(root, xpath, attribute_name=None, attribute_value=None):
 
 
 def datetime_from_iso(iso):
-    """returns a datetime object from dates in the format 2001-07-01T00:00:00Z or 2001-07-01T00:00:00.000Z """
+    """returns a datetime object from dates in the format 2001-07-01T00:00:00Z or 2001-07-01T00:00:00.000Z"""
     try:
         iso_datetime = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")
     except Exception:
@@ -853,14 +988,36 @@ def param_list_to_url_string(param_list, param_name):
     for param in param_list:
         if len(param) > 2:
             if not is_number(param[1]):
-                string += "&" + urlencode({param_name: param[0] + '("' + makeString(param[1]) + '","' + makeString(param[2]) + '")'})  # noqa
+                string += "&" + urlencode(
+                    {
+                        param_name: param[0]
+                        + '("'
+                        + makeString(param[1])
+                        + '","'
+                        + makeString(param[2])
+                        + '")'
+                    }
+                )  # noqa
             else:
-                string += "&" + urlencode({param_name: param[0] + "(" + makeString(param[1]) + "," + makeString(param[2]) + ")"})  # noqa
+                string += "&" + urlencode(
+                    {
+                        param_name: param[0]
+                        + "("
+                        + makeString(param[1])
+                        + ","
+                        + makeString(param[2])
+                        + ")"
+                    }
+                )  # noqa
         else:
             if not is_number(param[1]):
-                string += "&" + urlencode({param_name: param[0] + '("' + makeString(param[1]) + '")'})  # noqa
+                string += "&" + urlencode(
+                    {param_name: param[0] + '("' + makeString(param[1]) + '")'}
+                )  # noqa
             else:
-                string += "&" + urlencode({param_name: param[0] + "(" + makeString(param[1]) + ")"})  # noqa
+                string += "&" + urlencode(
+                    {param_name: param[0] + "(" + makeString(param[1]) + ")"}
+                )  # noqa
     return string
 
 
@@ -876,9 +1033,15 @@ class Authentication(object):
     _CERT = None
     _VERIFY = None
 
-    def __init__(self, username=None, password=None,
-                 cert=None, verify=True, shared=False,
-                 auth_delegate=None):
+    def __init__(
+        self,
+        username=None,
+        password=None,
+        cert=None,
+        verify=True,
+        shared=False,
+        auth_delegate=None,
+    ):
         '''
         :param str username=None: Username for basic authentication, None for
             unauthenticated access (or if using cert/verify)
@@ -926,8 +1089,10 @@ class Authentication(object):
                 raise TypeError('Value for "username" must be a str')
 
             if self.auth_delegate is not None:
-                raise ValueError('Authentication instances may have username/password or auth_delegate set,'
-                                 ' but not both')
+                raise ValueError(
+                    'Authentication instances may have username/password or auth_delegate set,'
+                    ' but not both'
+                )
 
         if self.shared:
             self.__class__._USERNAME = value
@@ -948,8 +1113,10 @@ class Authentication(object):
                 raise TypeError('Value for "password" must be a str')
 
             if self.auth_delegate is not None:
-                raise ValueError('Authentication instances may have username/password or auth_delegate set,'
-                                 ' but not both')
+                raise ValueError(
+                    'Authentication instances may have username/password or auth_delegate set,'
+                    ' but not both'
+                )
 
         if self.shared:
             self.__class__._PASSWORD = value
@@ -1002,7 +1169,8 @@ class Authentication(object):
             pass  # Passthrough when clearing the value
         elif not isinstance(value, (bool, str)):
             raise TypeError(
-                'Value for "verify" must a bool or str path to a file')
+                'Value for "verify" must a bool or str path to a file'
+            )
         elif isinstance(value, str):
             os.stat(value)  # Raises OSError/FileNotFoundError if missing
         if self.shared:
@@ -1020,11 +1188,15 @@ class Authentication(object):
     def auth_delegate(self, value):
         if value is not None:
             if not isinstance(value, AuthBase):
-                raise TypeError('Value for "auth_delegate" must be an instance of AuthBase')
+                raise TypeError(
+                    'Value for "auth_delegate" must be an instance of AuthBase'
+                )
 
             if self.username is not None or self.password is not None:
-                raise ValueError('Authentication instances may have username/password or auth_delegate set,'
-                                 ' but not both')
+                raise ValueError(
+                    'Authentication instances may have username/password or auth_delegate set,'
+                    ' but not both'
+                )
 
         if self.shared:
             self.__class__._AUTH_DELEGATE = value
@@ -1034,16 +1206,24 @@ class Authentication(object):
     @property
     def urlopen_kwargs(self):
         if self.auth_delegate is not None:
-            raise NotImplementedError("The urlopen_kwargs property is not supported when auth_delegate is set")
+            raise NotImplementedError(
+                "The urlopen_kwargs property is not supported when auth_delegate is set"
+            )
 
         return {
             'username': self.username,
             'password': self.password,
             'cert': self.cert,
-            'verify': self.verify
+            'verify': self.verify,
         }
 
     def __repr__(self, *args, **kwargs):
         return '<{} shared={} username={} password={} cert={} verify={} auth_delegate={}>'.format(
-            self.__class__.__name__, self.shared, self.username, self.password, self.cert, self.verify,
-            self.auth_delegate)
+            self.__class__.__name__,
+            self.shared,
+            self.username,
+            self.password,
+            self.cert,
+            self.verify,
+            self.auth_delegate,
+        )
